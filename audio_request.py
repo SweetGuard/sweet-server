@@ -3,7 +3,7 @@ import time
 from pydub import AudioSegment
 
 url = "http://localhost:8000/classify-audio"  # 서버의 classify_audio 엔드포인트 URL
-file_path = "/Users/trispark/summer2024/sweet_guard/server/long_violence.wav"  # 업로드할 파일 경로
+file_path = "/Users/trispark/summer2024/sweet_guard/server/test_sounds/낙상_combined.wav"  # 업로드할 파일 경로
 
 # 오디오 파일 로드
 audio = AudioSegment.from_wav(file_path)

@@ -9,15 +9,17 @@ import requests
 from tensorflow.keras.models import load_model
 import librosa
 from router.video import *
+import speech_recognition as sr
+from playsound import playsound
 
 # 서버 앱 초기화
 router = APIRouter()
 
 # 모델 및 설정 로드
-AUDIO_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/sound_test.h5"
+AUDIO_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/sound_test2.h5"
 audio_model = load_model(AUDIO_MODEL_PATH)
-SUSPICION_THRESHOLD = 10
-EMERGENCY_THRESHOLD = 20
+SUSPICION_THRESHOLD = 3
+# EMERGENCY_THRESHOLD = 20
 
 
 
@@ -29,10 +31,9 @@ SLIDING_INTERVAL = 1
   
 SAMPLE_RATE = 16000  # assuming 16kHz sampling rate
 audio_buffer: deque[np.ndarray] = deque(maxlen=int(BUFFER_DURATION * SAMPLE_RATE))
-recent_labels = deque(maxlen=10)
-required_timesteps = 13
+recent_labels = deque(maxlen=30)
+required_timesteps = 128
 
-# 음성 분석 API
 @router.post("/classify-audio")
 async def classify_audio(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     audio_data = await file.read()
@@ -41,14 +42,13 @@ async def classify_audio(file: UploadFile = File(...), background_tasks: Backgro
 
     # deque에 5초 분량이 쌓였는지 확인
     if len(audio_buffer) == BUFFER_DURATION * SAMPLE_RATE:
-        # 5초 분량의 오디오 데이터를 numpy array로 변환
         buffer_array = np.array(audio_buffer)
-        
+
         # 음성 데이터를 MFCC로 변환하여 (타임스텝, 13) 형상으로 맞춤
-        mfcc = librosa.feature.mfcc(y=audio_array, sr=16000, n_mfcc=13)
+        mfcc = librosa.feature.mfcc(y=audio_array, sr=SAMPLE_RATE, n_mfcc=13)
         mfcc = mfcc.T  # (타임스텝, 13) 형상으로 전치하여 (타임스텝, 13)
 
-        # 타임스텝을 13으로 맞춤
+        # (128, 128) 크기로 맞춤
         if mfcc.shape[0] < required_timesteps:
             # 부족한 타임스텝을 0으로 패딩
             padding = np.zeros((required_timesteps - mfcc.shape[0], 13))
@@ -57,69 +57,83 @@ async def classify_audio(file: UploadFile = File(...), background_tasks: Backgro
             # 타임스텝이 초과된 경우 자르기
             mfcc = mfcc[:required_timesteps]
 
-        # 최종 형상 조정: (1, 13, 1, 1)
-        mfcc = mfcc.reshape((13, 13))  # (타임스텝, 13) 형상 유지
-        mfcc = mfcc[:, :, np.newaxis, np.newaxis]  # (13, 13
+        # MFCC를 (128, 128, 1) 크기로 변환
+        mfcc = np.tile(mfcc, (1, int(np.ceil(128 / mfcc.shape[1]))))[:128, :128]  # (128, 128)
+        mfcc = mfcc[:, :, np.newaxis]  # (128, 128, 1)
 
         # 모델 예측
-        prediction = audio_model.predict(mfcc)
+        prediction = audio_model.predict(np.expand_dims(mfcc, axis=0))  # 배치 차원 추가
         predicted_class = int(np.argmax(prediction))
         print(f"Prediction class: {predicted_class}")
-        prediction_label = "일상"
+        prediction_label = "일상" if predicted_class == 1 else "위험"
 
-    # # 예측된 클래스에 따라 상황별 핸들링 수행
-    # if predicted_class == 0:
-    #     result = "범죄"
-    #     await handle_crime_situation("crime")
-    # elif predicted_class == 1:
-    #     result = "쓰러짐"
-    #     await handle_fall_situation(background_tasks, "fall")
-    # elif predicted_class == 2:
-    #     result = "도와줘"
-    #     await handle_help_situation("help")
-    # else:
-    #     result = "일상"
-
-        if predicted_class == 1:
-            prediction_label = "일상"
-        elif predicted_class == 0: # "비정상"범주임 (아직 비정상이 분류되지 않음)
-            prediction_label = "범죄"
-            await handle_crime_situation(prediction_label)
-
+        # recent_labels에 예측 결과 추가
         recent_labels.append(prediction_label)
+
+        # 비정상 상황일 때만 비동기 처리
+        if prediction_label == "위험":
+            label_count = recent_labels.count(prediction_label)
+            if label_count == SUSPICION_THRESHOLD:
+                background_tasks.add_task(handle_abnormal_situation, prediction_label)
 
         # 슬라이딩 윈도우 방식으로 버퍼 일부 제거
         if len(audio_buffer) == int(BUFFER_DURATION * SAMPLE_RATE):
             del list(audio_buffer)[:int(SLIDING_INTERVAL * SAMPLE_RATE)]
 
-        return {"status": "success", "classification": prediction_label}
-    
-    return {"status": "waiting", "message": "wait at least 5 secs"}
+        return {"status": "성공", "classification": prediction_label}
+
+    return {"status": "처리중", "message": "5초 정도 기다려주세요"}
 
 # 상황별 함수
-async def handle_crime_situation(prediction_label):
-    requests.post(f"{CAM_SERVER}/start")
-    process_notification("crime", prediction_label, recent_labels)
+async def handle_abnormal_situation(prediction_label):
+    # 괜찮냐고 물어봄 
+    # -> 괜찮다면 상황 종료 / 도와달라하면 바로 신고 
+    # 대답이 없으면 우선 위험이 예상되는 상황임을 연락하고 캠을 켬 -> 캠으로 위험 상황 감지되면 위험 상황 연락
+    playsound("/Users/trispark/summer2024/sweet_guard/server/voice_assistant/warning_message_korean.mp3")
 
-async def handle_fall_situation(background_tasks: BackgroundTasks, prediction_label):
-    if not await ask_user_if_ok():
-        background_tasks.add_task(send_frames)
-        process_notification("fall", prediction_label, recent_labels)
+    recognizer = sr.Recognizer()
+    mic = sr.Microphone()
 
-async def handle_help_situation(prediction_label):
-    process_notification("help", prediction_label, recent_labels)
+    print("Listening for '도와줘' or '괜찮아'...")
 
-# 음성 어시스턴트가 사용자에게 괜찮은지 묻는 함수 (아직 implement x)
-async def ask_user_if_ok():
-    print("음성 어시스턴트: '괜찮으십니까? 예/아니오로 응답해 주세요.'")
-    await asyncio.sleep(3)
-    return False  # 예시: 기본적으로 응답 없음
+    with mic as source:
+        recognizer.adjust_for_ambient_noise(source)  # 주변 소음 조절
+        audio = recognizer.listen(source, timeout=10, phrase_time_limit=5)  # 대기 시간 설정
 
-# 메시지 전송 함수
-def process_notification(situation_type: str, prediction_label: str, recent_labels):
-    label_count = recent_labels.count(prediction_label)
-    if label_count == SUSPICION_THRESHOLD:
-        send_line_notify(f"{situation_type} 의심 상황 발생 ({label_count}회)")
-    elif label_count == EMERGENCY_THRESHOLD:
-        send_line_notify(f"{situation_type} 상황 발생 ({label_count}회)")
+    recognized = False
+    try:
+        text = recognizer.recognize_google(audio, language="ko-KR")  # 한국어 인식
+        print(f"Recognized Text: {text}")
+
+        if "도와줘" in text:
+            # 도와달라하면 바로 신고 
+            recognized = True
+            playsound("/Users/trispark/summer2024/sweet_guard/server/voice_assistant/danger.mp3")
+            send_line_notify(f"{prediction_label} 상황 발생")
+            recent_labels.clear()
+            
+        elif "괜찮아" in text:
+            # 괜찮다면 상황 종료
+            recognized = True
+            playsound('/Users/trispark/summer2024/sweet_guard/server/voice_assistant/fine.mp3')
+            recent_labels.clear()
+
+    except sr.UnknownValueError:
+        print("음성을 인식하지 못했습니다.")
+    except sr.RequestError as e:
+        print(f"Google Speech Recognition 서비스에 접근할 수 없습니다. 오류: {e}")
+    
+    # 음성을 인식하지 못하거나 원하는 문구가 없을 때 처리
+    if not recognized:
+        recognized = False
+        # 대답이 없으면 우선 위험이 예상되는 상황임을 연락하고 캠을 켬 -> 캠으로 위험 상황 감지되면 위험 상황 연락
+        playsound("/Users/trispark/summer2024/sweet_guard/server/voice_assistant/no_response.mp3")
+        send_line_notify(f"{prediction_label} 예상 상황 발생. 도움 요청.")
+        requests.post(f"{CAM_SERVER}/start")
+
+# def process_abnormal_situation(prediction_label, recent_labels):
+#     label_count = recent_labels.count(prediction_label)
+#     if label_count == SUSPICION_THRESHOLD:
+#         handle_abnormal_situation(prediction_label)
+        
 

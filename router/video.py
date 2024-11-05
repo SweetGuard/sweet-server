@@ -20,7 +20,7 @@ router = APIRouter()
 # 모델 및 설정 로드
 LABELS = ["v", "d", "f"]
 NORMAL_LABEL_IDX = 1
-LSTM_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/transformer_augment.keras"
+LSTM_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/transformer_augment.keras"
 yolo_model = YOLO("yolo11n.pt")
 lstm_model = load_model(LSTM_MODEL_PATH)
 SEQUENCE_LENGTH = 80
@@ -32,20 +32,48 @@ EMERGENCY_THRESHOLD = 5
 CAM_SERVER = "http://localhost:9000"
 HOST_URL = "localhost:8000"
 is_streaming = False
+streaming_task = None
 recent_labels = deque(maxlen=10)
 
-# WebSocket을 통한 비동기 스트림 전송
+# 비동기 함수: 프레임을 서버에 전송하는 작업
 async def send_frames():
     global is_streaming
-    async with websockets.connect(f'ws://{HOST_URL}/camera/stream') as websocket:
-        cap = cv2.VideoCapture(0)
+    async with websockets.connect(F'ws://{HOST_URL}/camera/stream') as websocket:
+        cap = cv2.VideoCapture(0)  # 1번 카메라 사용
+        fc = 0  # 프레임 카운터
+
         while cap.isOpened() and is_streaming:
             ret, frame = cap.read()
             if not ret:
+                print("프레임 읽기 실패")
                 break
-            _, buffer = cv2.imencode('.jpg', frame)
-            await websocket.send(buffer.tobytes())
+
+            fc += 1
+
+            # 30 프레임에 한 번씩 서버에 전송
+            if fc % 1 == 0:  # 조정 가능
+                _, buffer = cv2.imencode('.jpg', frame)
+                await websocket.send(buffer.tobytes())
+                print(f"{fc}번째 프레임 전송 완료")
+
+                try:
+                    # 서버로부터 응답 수신
+                    response = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                    print(f"서버 응답: {response}")
+                except asyncio.TimeoutError:
+                    print("서버 응답 대기 시간이 초과되었습니다.")
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("사용자가 스트림을 종료했습니다.")
+                break
+
         cap.release()
+        print("카메라 스트림 종료")
+
+# 백그라운드로 실행할 스레드용 함수
+def run_stream():
+    global streaming_task
+    asyncio.run(send_frames())
 
 # WebSocket 엔드포인트
 @router.websocket("/camera/stream")
@@ -123,19 +151,29 @@ async def video_stream_endpoint(websocket: WebSocket):
         if websocket.client_state == WebSocketState.CONNECTED:
             await websocket.close()
 
-# 카메라 제어 API
-@router.post("/camera/start")
-async def cam_start():
-    try:
-        response = requests.post(f"{CAM_SERVER}/start")
-        print(response.json() if response.status_code == 200 else f"스트림 시작 요청 실패: {response.status_code}")
-    except requests.exceptions.RequestException as e:
-        print(f"스트림 시작 요청 중 오류 발생: {e}")
+# 스트림 시작 API 엔드포인트
+@app.post("/camera/start")
+async def cam_start(background_tasks: BackgroundTasks):
+    global is_streaming, streaming_task
+    if not is_streaming:
+        is_streaming = True
+        streaming_task = Thread(target=run_stream)
+        streaming_task.start()
+        return {"message": "스트림 시작됨"}
+    else:
+        return {"message": "스트림이 이미 실행 중입니다."}
 
-@router.post("/camera/stop")
+# 스트림 중지 API 엔드포인트
+@app.post("/camera/stop")
 async def cam_stop():
-    try:
-        response = requests.post(f"{CAM_SERVER}/stop")
-        print(response.json() if response.status_code == 200 else f"스트림 중지 요청 실패: {response.status_code}")
-    except requests.exceptions.RequestException as e:
-        print(f"스트림 중지 요청 중 오류 발생: {e}")
+    global is_streaming
+    if is_streaming:
+        is_streaming = False
+        return {"message": "스트림 중지됨"}
+    else:
+        return {"message": "스트림이 실행 중이 아닙니다."}
+
+# 스트림 상태 확인 API 엔드포인트
+@app.get("/camera/check")
+async def cam_check():
+    return {"state": is_streaming}

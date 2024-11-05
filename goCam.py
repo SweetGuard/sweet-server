@@ -120,18 +120,26 @@ def run_stream():
     cap.release()
     cv2.destroyAllWindows()
 
-# 스트림 시작 API 엔드포인트
 @app.post("/start")
 def start_stream(background_tasks: BackgroundTasks):
-    global is_streaming, streaming_task
+    global is_streaming, streaming_task, sequence_data1, sequence_data2, sequence_data3
+    
     if not is_streaming:
         is_streaming = True
         reset_notifications()  # 스트림 시작 시 노티 플래그 초기화
+
+        # deque 초기화
+        sequence_data1 = deque(maxlen=SEQUENCE_LENGTH)
+        sequence_data2 = deque(maxlen=SEQUENCE_LENGTH)
+        sequence_data3 = deque(maxlen=SEQUENCE_LENGTH)
+
+        # 스트림을 새로 시작
         streaming_task = Thread(target=run_stream)
         streaming_task.start()
         return {"message": "스트림 시작됨"}
     else:
         return {"message": "스트림이 이미 실행 중입니다."}
+
 
 # 스트림 중지 API 엔드포인트
 @app.post("/stop")

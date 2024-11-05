@@ -16,12 +16,10 @@ from playsound import playsound
 router = APIRouter()
 
 # 모델 및 설정 로드
-AUDIO_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/sound_test2.h5"
+AUDIO_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/model_image_10sec.keras"
 audio_model = load_model(AUDIO_MODEL_PATH)
-SUSPICION_THRESHOLD = 3
+SUSPICION_THRESHOLD = 10
 # EMERGENCY_THRESHOLD = 20
-
-
 
 # 전역 변수 설정
 CAM_SERVER = "http://localhost:9000"
@@ -45,21 +43,21 @@ async def classify_audio(file: UploadFile = File(...), background_tasks: Backgro
         buffer_array = np.array(audio_buffer)
 
         # 음성 데이터를 MFCC로 변환하여 (타임스텝, 13) 형상으로 맞춤
-        mfcc = librosa.feature.mfcc(y=audio_array, sr=SAMPLE_RATE, n_mfcc=13)
+        mfcc = librosa.feature.mfcc(y=buffer_array, sr=SAMPLE_RATE, n_mfcc=13)
         mfcc = mfcc.T  # (타임스텝, 13) 형상으로 전치하여 (타임스텝, 13)
 
-        # (128, 128) 크기로 맞춤
-        if mfcc.shape[0] < required_timesteps:
+        # (400, 1000) 크기로 맞춤
+        if mfcc.shape[0] < 400:
             # 부족한 타임스텝을 0으로 패딩
-            padding = np.zeros((required_timesteps - mfcc.shape[0], 13))
+            padding = np.zeros((400 - mfcc.shape[0], 13))
             mfcc = np.vstack([mfcc, padding])
-        elif mfcc.shape[0] > required_timesteps:
+        elif mfcc.shape[0] > 400:
             # 타임스텝이 초과된 경우 자르기
-            mfcc = mfcc[:required_timesteps]
+            mfcc = mfcc[:400]
 
-        # MFCC를 (128, 128, 1) 크기로 변환
-        mfcc = np.tile(mfcc, (1, int(np.ceil(128 / mfcc.shape[1]))))[:128, :128]  # (128, 128)
-        mfcc = mfcc[:, :, np.newaxis]  # (128, 128, 1)
+        # MFCC를 (400, 1000, 1) 크기로 변환
+        mfcc = np.tile(mfcc, (1, int(np.ceil(1000 / mfcc.shape[1]))))[:400, :1000]
+        mfcc = mfcc[:, :, np.newaxis]  # (400, 1000, 1)
 
         # 모델 예측
         prediction = audio_model.predict(np.expand_dims(mfcc, axis=0))  # 배치 차원 추가
@@ -131,9 +129,5 @@ async def handle_abnormal_situation(prediction_label):
         send_line_notify(f"{prediction_label} 예상 상황 발생. 도움 요청.")
         requests.post(f"{CAM_SERVER}/start")
 
-# def process_abnormal_situation(prediction_label, recent_labels):
-#     label_count = recent_labels.count(prediction_label)
-#     if label_count == SUSPICION_THRESHOLD:
-#         handle_abnormal_situation(prediction_label)
         
 

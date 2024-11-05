@@ -13,12 +13,14 @@ from tensorflow.keras.models import load_model
 from goCam import *
 from video_utils import *
 from starlette.websockets import WebSocketState
+from threading import Thread
+import time
 
 # 서버 앱 초기화
 router = APIRouter()
 
 # 모델 및 설정 로드
-LABELS = ["v", "d", "f"]
+LABELS = ["폭력", "일상", "쓰러짐"]
 NORMAL_LABEL_IDX = 1
 LSTM_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/transformer_augment.keras"
 yolo_model = YOLO("yolo11n.pt")
@@ -26,20 +28,26 @@ lstm_model = load_model(LSTM_MODEL_PATH)
 SEQUENCE_LENGTH = 80
 # LINE_TOKEN = "owva2Uxp1YB1BeKxE31Ji8E1gy7DFwyZwQYd0UKsPRV"
 SUSPICION_THRESHOLD = 4
-EMERGENCY_THRESHOLD = 5
+EMERGENCY_THRESHOLD = 10
+DAILY_THRESHOLD = 30 * 60 * 5 - 60 
 
 # 전역 변수 설정
-CAM_SERVER = "http://localhost:9000"
+# CAM_SERVER = "http://localhost:9000"
 HOST_URL = "localhost:8000"
 is_streaming = False
 streaming_task = None
-recent_labels = deque(maxlen=10)
+recent_labels = deque(maxlen=30)
+daily_detect_labels = deque(maxlen=30 * 60 * 5) # 1초에 30 프레임 & 5분
+
+# 스트림 종료를 위한 타이머 설정
+last_suspicion_time = time.time()  # 초기화
+stop_video_task = None
 
 # 비동기 함수: 프레임을 서버에 전송하는 작업
 async def send_frames():
     global is_streaming
     async with websockets.connect(F'ws://{HOST_URL}/camera/stream') as websocket:
-        cap = cv2.VideoCapture(0)  # 1번 카메라 사용
+        cap = cv2.VideoCapture(1)  # 1번 카메라 사용
         fc = 0  # 프레임 카운터
 
         while cap.isOpened() and is_streaming:
@@ -110,14 +118,25 @@ async def video_stream_endpoint(websocket: WebSocket):
                     pred_idx = np.argmax(lstm_model.predict([input_1, input_2, input_3], verbose=0))
                     prediction_label = LABELS[pred_idx]
 
-                    # 예측 결과 전송 및 의심 상황 감지
+                    # 예측 결과 WebSocket을 통해 클라이언트로 전송
                     await websocket.send_text(f"Prediction: {prediction_label}")
                     recent_labels.append(prediction_label)
-                    if recent_labels.count(prediction_label) == SUSPICION_THRESHOLD:
-                        send_line_notify(f"{prediction_label} 의심 상황 발생")
-                    if recent_labels.count(prediction_label) == EMERGENCY_THRESHOLD:
-                        send_line_notify(f"{prediction_label} 상황 발생")
+                    daily_detect_labels.append(prediction_label)
 
+                    # 상황 처리 로직
+                    if prediction_label in ["폭력", "쓰러짐"]:
+                        if recent_labels.count(prediction_label) == SUSPICION_THRESHOLD:
+                            send_line_notify(f"{prediction_label} 의심 상황 발생")
+                        if recent_labels.count(prediction_label) == EMERGENCY_THRESHOLD:
+                            send_line_notify(f"{prediction_label} 상황 발생. 즉시 신고")
+                            await cam_stop()
+                            break
+                    elif prediction_label == "일상":
+                        if daily_detect_labels.count(prediction_label) == DAILY_THRESHOLD:
+                            # 5분 동안 "일상" 상태 유지 시 종료
+                            await cam_stop()
+                            break
+                        
             # 프레임에 예측 결과 표시
             if frame is not None:
                 cv2.putText(
@@ -152,7 +171,7 @@ async def video_stream_endpoint(websocket: WebSocket):
             await websocket.close()
 
 # 스트림 시작 API 엔드포인트
-@app.post("/camera/start")
+@router.post("/camera/start")
 async def cam_start(background_tasks: BackgroundTasks):
     global is_streaming, streaming_task
     if not is_streaming:
@@ -164,7 +183,7 @@ async def cam_start(background_tasks: BackgroundTasks):
         return {"message": "스트림이 이미 실행 중입니다."}
 
 # 스트림 중지 API 엔드포인트
-@app.post("/camera/stop")
+@router.post("/camera/stop")
 async def cam_stop():
     global is_streaming
     if is_streaming:
@@ -174,6 +193,6 @@ async def cam_stop():
         return {"message": "스트림이 실행 중이 아닙니다."}
 
 # 스트림 상태 확인 API 엔드포인트
-@app.get("/camera/check")
+@router.get("/camera/check")
 async def cam_check():
     return {"state": is_streaming}

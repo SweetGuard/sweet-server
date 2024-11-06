@@ -14,7 +14,7 @@ import speech_recognition as sr
 router = APIRouter()
 
 # 모델 및 설정 로드
-AUDIO_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/model_image_10sec.keras"
+AUDIO_MODEL_PATH = "/medels/jhyaudio1.h5"
 audio_model = load_model(AUDIO_MODEL_PATH)
 SUSPICION_THRESHOLD = 10
 
@@ -25,6 +25,9 @@ SLIDING_INTERVAL = 1  # 1초마다 슬라이딩
 SAMPLE_RATE = 16000  # 16kHz 샘플링
 audio_buffer: deque[np.ndarray] = deque(maxlen=int(BUFFER_DURATION * SAMPLE_RATE))
 recent_labels = deque(maxlen=30)
+import librosa
+import numpy as np
+import cv2
 
 # WebSocket 엔드포인트로 모든 음성 처리 통합
 @router.websocket("/ws/audio")
@@ -44,34 +47,32 @@ async def audio_processing(websocket: WebSocket):
             if len(audio_buffer) == BUFFER_DURATION * SAMPLE_RATE:
                 buffer_array = np.array(audio_buffer)
                 
-                # MFCC 변환
-                mfcc = librosa.feature.mfcc(y=buffer_array, sr=SAMPLE_RATE, n_mfcc=13).T
-                if mfcc.shape[0] < 400:
-                    padding = np.zeros((400 - mfcc.shape[0], 13))
-                    mfcc = np.vstack([mfcc, padding])
-                elif mfcc.shape[0] > 400:
-                    mfcc = mfcc[:400]
-                mfcc = np.tile(mfcc, (1, int(np.ceil(1000 / mfcc.shape[1]))))[:400, :1000]
-                mfcc = mfcc[:, :, np.newaxis]
+                # MFCC 추출 및 변환
+                segments = extract_mfcc_segments(buffer_array, sr=SAMPLE_RATE)
+                
+                # 각 세그먼트를 모델의 input shape에 맞게 변환하고 예측
+                for segment in segments:
+                    # 128x128로 리사이즈, 3 채널 유지
+                    data_resized = cv2.resize(segment, (128, 128))
+                    data_resized = np.expand_dims(data_resized, axis=0)  # 배치 차원 추가
+                    data_resized = np.expand_dims(data_resized, axis=-1)  # 채널 차원 추가하여 (1, 128, 128, 3)로 맞춤
+                    
+                    # 모델 예측
+                    prediction = audio_model.predict(data_resized, verbose=0)
+                    predicted_class = int(np.argmax(prediction))
+                    prediction_label = "일상" if predicted_class == 0 else "위험"
+                    print(f"Prediction class: {predicted_class}")
 
-                # 모델 예측
-                prediction = audio_model.predict(np.expand_dims(mfcc, axis=0), verbose=0)
-                predicted_class = int(np.argmax(prediction))
-                prediction_label = "일상" if predicted_class == 0 else "위험"
-                print(f"Prediction class: {predicted_class}")
+                    # 예측 결과에 따른 처리
+                    recent_labels.append(prediction_label)
 
-                # 예측 결과에 따른 처리
-                recent_labels.append(prediction_label)
-
-                if prediction_label == "위험":
-                    label_count = recent_labels.count(prediction_label)
-                    if label_count == SUSPICION_THRESHOLD:
-                        await handle_abnormal_situation(websocket, recognizer)  # WebSocket으로 후속 처리
-                        break
+                    if prediction_label == "위험":
+                        label_count = recent_labels.count(prediction_label)
+                        if label_count == SUSPICION_THRESHOLD:
+                            await handle_abnormal_situation(websocket, recognizer)  # WebSocket으로 후속 처리
+                            break
 
                 # 슬라이딩 윈도우 방식으로 버퍼 일부 제거 (1초 분량)
-                # del audio_buffer[:int(SLIDING_INTERVAL * SAMPLE_RATE)]
-                # 슬라이딩 윈도우 방식으로 버퍼 일부 제거
                 if len(audio_buffer) == int(BUFFER_DURATION * SAMPLE_RATE):
                     del list(audio_buffer)[:int(SLIDING_INTERVAL * SAMPLE_RATE)]
 
@@ -79,6 +80,27 @@ async def audio_processing(websocket: WebSocket):
         print("WebSocket 연결이 닫혔습니다.")
     finally:
         await websocket.close()
+
+def extract_mfcc_segments(audio_data, sr=16000, duration=5):
+    """
+    오디오 데이터를 5초씩 잘라서 MFCC 추출
+    """
+    segments = []
+    total_length = librosa.get_duration(y=audio_data, sr=sr)
+    
+    for start in range(0, int(total_length), duration):
+        end = start + duration
+        if end <= total_length:
+            # 5초 구간 오디오 추출
+            y_segment = audio_data[start * sr:end * sr]
+            
+            # MFCC 추출 (157개 MFCC, 3채널)
+            mfcc = librosa.feature.mfcc(y=y_segment, sr=sr, n_mfcc=157)
+            mfcc_3ch = np.stack([mfcc] * 3, axis=-1)  # 3채널로 맞춤
+            segments.append(mfcc_3ch)
+    
+    return segments
+
 
 # WebSocket을 통한 위험 상황 후속 처리 함수
 async def handle_abnormal_situation(websocket: WebSocket, recognizer: sr.Recognizer):

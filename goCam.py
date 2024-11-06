@@ -14,8 +14,20 @@ import torch
 import requests
 import time
 from tensorflow.keras.models import load_model
+from fastapi import FastAPI, BackgroundTasks
+from threading import Thread
+from collections import deque
+from video_utils import * 
+import numpy as np
+import cv2
+import gc
+import torch
+import requests
+import time
+from tensorflow.keras.models import load_model
 
 app = FastAPI()
+is_streaming = False
 is_streaming = False
 streaming_task = None
 
@@ -111,7 +123,15 @@ def run_stream():
             cv2.imshow("수신된 영상", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 print("영상 표시 종료")
+                print("영상 표시 종료")
                 break
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        time.sleep(0.1)
+
+    cap.release()
+    cv2.destroyAllWindows()
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -124,8 +144,18 @@ def run_stream():
 def start_stream(background_tasks: BackgroundTasks):
     global is_streaming, streaming_task, sequence_data1, sequence_data2, sequence_data3
     
+    global is_streaming, streaming_task, sequence_data1, sequence_data2, sequence_data3
+    
     if not is_streaming:
         is_streaming = True
+        reset_notifications()  # 스트림 시작 시 노티 플래그 초기화
+
+        # deque 초기화
+        sequence_data1 = deque(maxlen=SEQUENCE_LENGTH)
+        sequence_data2 = deque(maxlen=SEQUENCE_LENGTH)
+        sequence_data3 = deque(maxlen=SEQUENCE_LENGTH)
+
+        # 스트림을 새로 시작
         reset_notifications()  # 스트림 시작 시 노티 플래그 초기화
 
         # deque 초기화
@@ -141,6 +171,7 @@ def start_stream(background_tasks: BackgroundTasks):
         return {"message": "스트림이 이미 실행 중입니다."}
 
 
+
 # 스트림 중지 API 엔드포인트
 @app.post("/stop")
 def stop_stream():
@@ -150,6 +181,8 @@ def stop_stream():
         return {"message": "스트림 중지됨"}
     else:
         return {"message": "스트림이 실행 중이 아닙니다."}
+
+
 
 
     

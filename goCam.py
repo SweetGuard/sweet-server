@@ -19,21 +19,21 @@ app = FastAPI()
 is_streaming = False
 streaming_task = None
 
-MAIN_SERVER_URL = "http://localhost:8000/get_predict"
+MAIN_SERVER_URL = "http://192.168.0.184:8000/get_predict"
 
 SEQUENCE_LENGTH = 80
-LABELS = ["일상", "폭력", "쓰러짐"]
+LABELS = ["danger", "daily", "falldown"]
 SUSPICION_THRESHOLD = 5
 EMERGENCY_THRESHOLD = 10
 DAILY_THRESHOLD = 300
-LSTM_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/transformer_augment.keras"
+LSTM_MODEL_PATH = "C:/Models/sweet/transformer_augment.keras"
 lstm_model = load_model(LSTM_MODEL_PATH)
 
 recent_labels = deque(maxlen=100)
 daily_detect_labels = deque(maxlen=100)
 
 # 노티 전송 여부를 저장하는 플래그
-notification_sent = {"폭력": False, "쓰러짐": False}
+notification_sent = {"danger": False, "falldown": False}
 
 def reset_notifications():
     global notification_sent
@@ -48,7 +48,7 @@ def predict_with_model(input_1, input_2, input_3):
 
 def run_stream():
     global is_streaming
-    cap = cv2.VideoCapture(0)  # 카메라 시작
+    cap = cv2.VideoCapture(1)  # 카메라 시작
     sequence_data1 = deque(maxlen=SEQUENCE_LENGTH)
     sequence_data2 = deque(maxlen=SEQUENCE_LENGTH)
     sequence_data3 = deque(maxlen=SEQUENCE_LENGTH)
@@ -87,7 +87,7 @@ def run_stream():
                     print(f"Error sending prediction: {e}")
 
                 # 상황 처리 로직 및 노티 전송 관리
-                if prediction_label in ["폭력", "쓰러짐"]:
+                if prediction_label in ["danger", "falldown"]:
                     if not notification_sent[prediction_label]:  # 각 상황에 대해 1회 노티 전송
                         if recent_labels.count(prediction_label) >= SUSPICION_THRESHOLD:
                             send_line_notify(f"{prediction_label} 의심 상황 발생")

@@ -17,12 +17,12 @@ from fastapi.responses import JSONResponse
 router = APIRouter()
 
 # 모델 및 설정 로드
-AUDIO_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/jhyaudio1.h5"
+AUDIO_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/jhyaudio2.h5"
 audio_model = load_model(AUDIO_MODEL_PATH)
-SUSPICION_THRESHOLD = 10
+SUSPICION_THRESHOLD = 3
 
 # 전역 변수 설정
-CAM_SERVER = "http://localhost:9000"
+CAM_SERVER = "http://192.168.0.226:9000"
 BUFFER_DURATION = 5  # 5초 분량의 오디오 데이터
 SLIDING_INTERVAL = 1  # 1초마다 슬라이딩
 SAMPLE_RATE = 16000  # 16kHz 샘플링
@@ -63,7 +63,7 @@ async def audio_processing(websocket: WebSocket):
                     # 모델 예측
                     prediction = audio_model.predict(data_resized, verbose=0)
                     predicted_class = int(np.argmax(prediction))
-                    prediction_label = "일상" if predicted_class == 1 else "위험"
+                    prediction_label = "일상" if predicted_class == 0 else "위험"
                     print(f"Prediction class at auidio1: {predicted_class}")
 
                     # 예측 결과에 따른 처리
@@ -107,9 +107,10 @@ def extract_mfcc_segments(audio_data, sr=16000, duration=5):
     
     return segments
 
-
 @router.post("/handle_abnormal_situation_file")
 async def handle_abnormal_situation_file(file: UploadFile = File(...)):
+    # test_cam_server_connection()
+
     recognizer = sr.Recognizer()
     audio_data = await file.read()
     audio = sr.AudioData(audio_data, sample_rate=16000, sample_width=2)

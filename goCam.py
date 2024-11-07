@@ -28,21 +28,19 @@ from tensorflow.keras.models import load_model
 
 app = FastAPI()
 is_streaming = False
-is_streaming = False
 streaming_task = None
 
 MAIN_SERVER_URL = "http://192.168.0.184:8000/get_predict"
 
 SEQUENCE_LENGTH = 80
-LABELS = ["danger", "daily", "falldown"]
+LABELS = ["daily", "danger", "falldown"]
 SUSPICION_THRESHOLD = 5
 EMERGENCY_THRESHOLD = 10
 DAILY_THRESHOLD = 300
-LSTM_MODEL_PATH = "C:/Models/sweet/transformer_augment.keras"
+LSTM_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/transformer_bestacc.keras"
 lstm_model = load_model(LSTM_MODEL_PATH)
 
 recent_labels = deque(maxlen=100)
-daily_detect_labels = deque(maxlen=100)
 
 # 노티 전송 여부를 저장하는 플래그
 notification_sent = {"danger": False, "falldown": False}
@@ -53,18 +51,15 @@ def reset_notifications():
     notification_sent = {key: False for key in notification_sent.keys()}
 
 # 모델 및 예측 함수
-def predict_with_model(input_1, input_2, input_3):
-    # 예측 모델 적용 부분 (예시 코드, 실제 모델에 맞게 수정 필요)
-    pred_idx = np.argmax(lstm_model.predict([input_1, input_2, input_3], verbose=0))
+def predict_with_model(input):
+    pred_idx = np.argmax(lstm_model.predict([input], verbose=0))
     return LABELS[pred_idx]
 
 def run_stream():
     global is_streaming
     cap = cv2.VideoCapture(1)  # 카메라 시작
-    sequence_data1 = deque(maxlen=SEQUENCE_LENGTH)
-    sequence_data2 = deque(maxlen=SEQUENCE_LENGTH)
-    sequence_data3 = deque(maxlen=SEQUENCE_LENGTH)
-    prediction_label = "프레임 수집중"
+    sequence_data = deque(maxlen=SEQUENCE_LENGTH)
+    prediction_label = "Frame incoming"
 
     while is_streaming and cap.isOpened():
         ret, frame = cap.read()
@@ -76,22 +71,14 @@ def run_stream():
         if bounding_boxes:
             pose_data = process_pose_data(frame, bounding_boxes)
             if pose_data is not None:
-                flattened_pose_1 = pose_data[:33].reshape(-1)
-                flattened_pose_2 = pose_data[33:66].reshape(-1)
-                flattened_pose_3 = pose_data[66:].reshape(-1)
-                
-                sequence_data1.append(flattened_pose_1)
-                sequence_data2.append(flattened_pose_2)
-                sequence_data3.append(flattened_pose_3)
+                flattened_pose = pose_data.reshape(-1)
+                sequence_data.append(flattened_pose)
 
-            if len(sequence_data1) == SEQUENCE_LENGTH:
-                input_1 = np.array(sequence_data1).reshape(1, SEQUENCE_LENGTH, 132)
-                input_2 = np.array(sequence_data2).reshape(1, SEQUENCE_LENGTH, 132)
-                input_3 = np.array(sequence_data3).reshape(1, SEQUENCE_LENGTH, 132)
+            if len(sequence_data) == SEQUENCE_LENGTH:
+                input_data = np.array(sequence_data).reshape(1, SEQUENCE_LENGTH, 396)
 
-                prediction_label = predict_with_model(input_1, input_2, input_3)
+                prediction_label = predict_with_model(input_data)
                 recent_labels.append(prediction_label)
-                daily_detect_labels.append(prediction_label)
 
                 try:
                     requests.post(MAIN_SERVER_URL, json={"prediction": prediction_label})
@@ -133,35 +120,16 @@ def run_stream():
     cap.release()
     cv2.destroyAllWindows()
 
-        gc.collect()
-        torch.cuda.empty_cache()
-        time.sleep(0.1)
-
-    cap.release()
-    cv2.destroyAllWindows()
-
 @app.post("/start")
 def start_stream(background_tasks: BackgroundTasks):
-    global is_streaming, streaming_task, sequence_data1, sequence_data2, sequence_data3
-    
-    global is_streaming, streaming_task, sequence_data1, sequence_data2, sequence_data3
-    
+    global is_streaming, streaming_task, sequence_data
+
     if not is_streaming:
         is_streaming = True
         reset_notifications()  # 스트림 시작 시 노티 플래그 초기화
 
         # deque 초기화
-        sequence_data1 = deque(maxlen=SEQUENCE_LENGTH)
-        sequence_data2 = deque(maxlen=SEQUENCE_LENGTH)
-        sequence_data3 = deque(maxlen=SEQUENCE_LENGTH)
-
-        # 스트림을 새로 시작
-        reset_notifications()  # 스트림 시작 시 노티 플래그 초기화
-
-        # deque 초기화
-        sequence_data1 = deque(maxlen=SEQUENCE_LENGTH)
-        sequence_data2 = deque(maxlen=SEQUENCE_LENGTH)
-        sequence_data3 = deque(maxlen=SEQUENCE_LENGTH)
+        sequence_data = deque(maxlen=SEQUENCE_LENGTH)
 
         # 스트림을 새로 시작
         streaming_task = Thread(target=run_stream)
@@ -169,8 +137,6 @@ def start_stream(background_tasks: BackgroundTasks):
         return {"message": "스트림 시작됨"}
     else:
         return {"message": "스트림이 이미 실행 중입니다."}
-
-
 
 # 스트림 중지 API 엔드포인트
 @app.post("/stop")
@@ -182,15 +148,14 @@ def stop_stream():
     else:
         return {"message": "스트림이 실행 중이 아닙니다."}
 
-
-
-
     
 @app.get("/check")
 def check():
     if is_streaming:
+        print("true##################################################################3")
         return {"state": True }
     else:
+        print("false##################################################################3")
         return {"state":False}
 
 # 서버 실행

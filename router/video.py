@@ -50,10 +50,11 @@ async def cam_stop():
     except requests.exceptions.RequestException as e:
         print(f"스트림 중지 요청 중 오류 발생: {e}")
 
-@router.get("/camera/check")
+@router.get("/camera-check")
 async def cam_check():
     response = requests.get(f"{CAM_SERVER}/check")
+    print(response.json().get('state'))
     if response.json().get('state'):
-        return True
+        return {"state": True}
     else:
-        return False
+        return {"state": False}

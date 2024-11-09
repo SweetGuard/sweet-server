@@ -2,3 +2,5 @@
 *.h5
 *.keras
 *.pt
+.env
+__pycache__

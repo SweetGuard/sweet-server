@@ -1,63 +1,48 @@
 import cv2
-import websockets
-import asyncio
-from fastapi import FastAPI, BackgroundTasks
-from threading import Thread
 from fastapi import FastAPI, BackgroundTasks
 from threading import Thread
 from collections import deque
 from video_utils import * 
 import numpy as np
-import cv2
 import gc
 import torch
 import requests
 import time
 from tensorflow.keras.models import load_model
-from fastapi import FastAPI, BackgroundTasks
-from threading import Thread
-from collections import deque
-from video_utils import * 
-import numpy as np
-import cv2
-import gc
-import torch
-import requests
-import time
-from tensorflow.keras.models import load_model
+from dotenv import load_dotenv
+import os
 
 app = FastAPI()
 is_streaming = False
 streaming_task = None
 
-MAIN_SERVER_URL = "http://192.168.0.184:8000/get_predict"
+load_dotenv() 
+MAIN_SERVER_IP = os.getenv("MAIN_SERVER_IP")
+MAIN_SERVER_URL = f"http://{MAIN_SERVER_IP}:8000/get_predict"
 
 SEQUENCE_LENGTH = 80
 LABELS = ["daily", "danger", "falldown"]
 SUSPICION_THRESHOLD = 5
 EMERGENCY_THRESHOLD = 10
-DAILY_THRESHOLD = 300
-LSTM_MODEL_PATH = "/Users/trispark/summer2024/sweet_guard/server/models/transformer_bestacc.keras"
-lstm_model = load_model(LSTM_MODEL_PATH)
+
+TRANSFORMER_MODEL_PATH = "./guard_model.keras"
+transformer_model = load_model(TRANSFORMER_MODEL_PATH)
 
 recent_labels = deque(maxlen=100)
-
-# 노티 전송 여부를 저장하는 플래그
 notification_sent = {"danger": False, "falldown": False}
 
 def reset_notifications():
     global notification_sent
-    # 노티 전송 플래그 초기화
     notification_sent = {key: False for key in notification_sent.keys()}
 
 # 모델 및 예측 함수
 def predict_with_model(input):
-    pred_idx = np.argmax(lstm_model.predict([input], verbose=0))
+    pred_idx = np.argmax(transformer_model.predict([input], verbose=0))
     return LABELS[pred_idx]
 
 def run_stream():
     global is_streaming
-    cap = cv2.VideoCapture(1)  # 카메라 시작
+    cap = cv2.VideoCapture(1)  # 컴퓨터와 연결된 USB 카메라
     sequence_data = deque(maxlen=SEQUENCE_LENGTH)
     prediction_label = "Frame incoming"
 
@@ -87,7 +72,7 @@ def run_stream():
 
                 # 상황 처리 로직 및 노티 전송 관리
                 if prediction_label in ["danger", "falldown"]:
-                    if not notification_sent[prediction_label]:  # 각 상황에 대해 1회 노티 전송
+                    if not notification_sent[prediction_label]:  
                         if recent_labels.count(prediction_label) >= SUSPICION_THRESHOLD:
                             send_line_notify(f"{prediction_label} 의심 상황 발생")
                             notification_sent[prediction_label] = True
@@ -152,10 +137,8 @@ def stop_stream():
 @app.get("/check")
 def check():
     if is_streaming:
-        print("true##################################################################3")
         return {"state": True }
     else:
-        print("false##################################################################3")
         return {"state":False}
 
 # 서버 실행

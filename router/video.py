@@ -1,24 +1,18 @@
 # 필요한 라이브러리 임포트
-from fastapi import FastAPI, WebSocket, UploadFile, File, BackgroundTasks, APIRouter, WebSocketDisconnect, Request
+from fastapi import FastAPI, APIRouter, Request
 from collections import deque
-import cv2
 import numpy as np
-import torch
-import asyncio
-import gc
 import requests
 import mediapipe as mp
-from ultralytics import YOLO
-from tensorflow.keras.models import load_model
 from goCam import *
 from video_utils import *
-from starlette.websockets import WebSocketState
-from threading import Thread
-import time
 
-# 서버 앱 초기화
 router = APIRouter()
-CAM_SERVER = "http://localhost:9000"
+
+load_dotenv() 
+CAM_SERVER_IP = os.getenv("CAM_SERVER_IP")
+CAM_SERVER = f"http://{CAM_SERVER_IP}:9000"
+
 # 예측 결과 저장소
 prediction_results = deque(maxlen=100)
 
